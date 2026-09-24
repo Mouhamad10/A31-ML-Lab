@@ -1,0 +1,234 @@
+name: A31 Lucreticus - CI Foundation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      A31_REPO: https://github.com/SN-Abdullah-Al-Noman/SM-A315F.git
+      A31_REF: A315FXXS5DXB1
+      A32_REPO: https://github.com/stardustps/kernel_samsung_mt6768-lucreticus.git
+      A32_REF: r1-Armaros
+
+    steps:
+      - name: Checkout lab repository
+        uses: actions/checkout@v7
+
+      - name: Show runner information
+        run: |
+          echo "=== RUNNER ==="
+          uname -a
+          echo
+          echo "=== CPU ==="
+          nproc
+          echo
+          echo "=== MEMORY ==="
+          free -h
+          echo
+          echo "=== DISK BEFORE ==="
+          df -h
+          echo
+
+      - name: Install CI tools
+        run: |
+          sudo apt-get update
+
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            ccache \
+            cpio \
+            curl \
+            device-tree-compiler \
+            file \
+            flex \
+            git \
+            libelf-dev \
+            libssl-dev \
+            lz4 \
+            ncurses-dev \
+            pahole \
+            python3 \
+            python3-pip \
+            rsync \
+            unzip \
+            wget \
+            xz-utils \
+            zstd \
+            android-sdk-libsparse-utils
+
+      - name: Verify CI tools
+        run: |
+          echo "=== TOOL CHECK ==="
+
+          command -v git
+          command -v make
+          command -v gcc
+          command -v python3
+          command -v dtc
+          command -v lz4
+          command -v cpio
+          command -v 7z || true
+          command -v simg2img
+          command -v img2simg
+          command -v pahole
+
+          echo
+          git --version
+          make --version | head -n 1
+          python3 --version
+          dtc --version
+          lz4 --version
+          pahole --version || true
+
+      - name: Clone A31 source
+        run: |
+          rm -rf "$RUNNER_TEMP/A31"
+
+          git clone \
+            --depth 1 \
+            --branch "$A31_REF" \
+            "$A31_REPO" \
+            "$RUNNER_TEMP/A31"
+
+          echo "A31 commit:"
+          git -C "$RUNNER_TEMP/A31" rev-parse HEAD
+
+          echo
+          echo "A31 size:"
+          du -sh "$RUNNER_TEMP/A31"
+
+      - name: Clone sparse A32 reference
+        run: |
+          rm -rf "$RUNNER_TEMP/A32"
+
+          git clone \
+            --filter=blob:none \
+            --depth 1 \
+            --branch "$A32_REF" \
+            "$A32_REPO" \
+            "$RUNNER_TEMP/A32"
+
+          cd "$RUNNER_TEMP/A32"
+
+          git sparse-checkout init --cone
+
+          git sparse-checkout set \
+            kernel/bpf \
+            include/linux \
+            include/uapi/linux \
+            net/core \
+            arch/arm64
+
+          git checkout "$A32_REF"
+
+          echo "A32 commit:"
+          git rev-parse HEAD
+
+          echo
+          echo "A32 sparse size:"
+          du -sh "$RUNNER_TEMP/A32"
+
+      - name: Inspect A31 build system
+        run: |
+          A31="$RUNNER_TEMP/A31"
+
+          echo "=== TOP LEVEL ==="
+          find "$A31" -maxdepth 1 -mindepth 1 -printf '%f\n' | sort | head -100
+
+          echo
+          echo "=== BUILD SCRIPTS ==="
+          find "$A31" -maxdepth 3 -type f \
+            \( \
+              -name 'build*.sh' \
+              -o -name 'build*.config' \
+              -o -name '*build*.sh' \
+            \) \
+            -print | sort | head -200
+
+          echo
+          echo "=== ARM64 DEFCONFIG CANDIDATES ==="
+          find "$A31/arch/arm64/configs" -maxdepth 1 -type f \
+            -printf '%f\n' 2>/dev/null | sort | head -200
+
+          echo
+          echo "=== TOOLCHAIN HINTS ==="
+
+          grep -RniE \
+            'CROSS_COMPILE|CLANG_TRIPLE|LLVM=|LLVM_IAS|CC=|CXX=|HOSTCC=|DEFCONFIG|mt6768|aarch64' \
+            "$A31/Makefile" \
+            "$A31/build.config*" \
+            "$A31/build*.sh" \
+            "$A31/scripts" \
+            "$A31/README"* \
+            2>/dev/null | head -300 || true
+
+      - name: Inspect A32 BPF reference
+        run: |
+          A32="$RUNNER_TEMP/A32"
+
+          echo "=== A32 BPF FILES ==="
+          find "$A32/kernel/bpf" -type f -print | sort
+
+          echo
+          echo "=== A32 BPF COUNT ==="
+          find "$A32/kernel/bpf" -type f | wc -l
+
+          echo
+          echo "=== A32 UAPI BPF HINTS ==="
+          grep -nE \
+            'BPF_PROG_TYPE|BPF_MAP_TYPE|BPF_ATTACH_TYPE|BPF_FUNC_|BPF_CMD' \
+            "$A32/include/uapi/linux/bpf.h" \
+            2>/dev/null | head -250 || true
+
+      - name: Disk after source preparation
+        run: |
+          echo "=== DISK AFTER ==="
+          df -h
+
+          echo
+          echo "=== TEMP DIRECTORY USAGE ==="
+          du -sh "$RUNNER_TEMP/A31" 2>/dev/null || true
+          du -sh "$RUNNER_TEMP/A32" 2>/dev/null || true
+
+      - name: Create foundation report
+        run: |
+          mkdir -p reports
+
+          {
+            echo "A31_REPO=$A31_REPO"
+            echo "A31_REF=$A31_REF"
+            echo "A31_COMMIT=$(git -C "$RUNNER_TEMP/A31" rev-parse HEAD)"
+            echo "A31_SIZE=$(du -sh "$RUNNER_TEMP/A31" | cut -f1)"
+
+            echo "A32_REPO=$A32_REPO"
+            echo "A32_REF=$A32_REF"
+            echo "A32_COMMIT=$(git -C "$RUNNER_TEMP/A32" rev-parse HEAD)"
+            echo "A32_SPARSE_SIZE=$(du -sh "$RUNNER_TEMP/A32" | cut -f1)"
+
+            echo "CPU=$(nproc)"
+            echo "KERNEL=$(uname -r)"
+
+            echo
+            echo "TOOLS"
+
+            git --version
+            python3 --version
+            dtc --version
+            pahole --version 2>&1 || true
+          } > reports/foundation.txt
+
+      - name: Upload foundation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: a31-foundation-report
+          path: reports/foundation.txt
+          retention-days: 7
